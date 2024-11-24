@@ -1,189 +1,367 @@
-import streamlit as st
+# Import necessary libraries
 import os
+import logging
+import streamlit as st
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-from pypdf import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter, SentenceTransformersTokenTextSplitter
-import umap
-import matplotlib.pyplot as plt
-import numpy as np
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from ollama import generate as ollama_generate, list as list_ollama_models
+import openai
+from dotenv import load_dotenv
+import re
+import time
+
+import openai
 from openai import OpenAI
-import tempfile
+# load_dotenv()
+# openai.api_key = os.getenv("OPENAI_API_KEY")
+# default_openai_api_key = os.getenv("OPENAI_API_KEY")
+# Ensure the .env file is loaded ONLY if it exists
+if os.path.exists(".env"):
+    load_dotenv(override=True)  # Forcefully override any system environment variables
+    default_openai_api_key = os.getenv("OPENAI_API_KEY")
+else:
+    default_openai_api_key = None
+openai_client = OpenAI()
 
-# Initialize session state variables
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'chroma_collection' not in st.session_state:
-    st.session_state.chroma_collection = None
-if 'embedding_function' not in st.session_state:
-    st.session_state.embedding_function = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-if 'umap_model' not in st.session_state:
-    st.session_state.umap_model = None
-if 'embeddings' not in st.session_state:
-    st.session_state.embeddings = None
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-# Reuse your existing functions with slight modifications
-def read_pdf(file):
-    reader = PdfReader(file)
+# Streamlit page configuration
+st.set_page_config(
+    page_title="RAG Application: OpenAI and Ollama Integration 📘",
+    page_icon="📘",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Helper function to sanitize collection names
+def sanitize_collection_name(name):
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    sanitized = sanitized[:63]
+    sanitized = re.sub(r"^[^a-zA-Z0-9]+", "", sanitized)
+    sanitized = re.sub(r"[^a-zA-Z0-9]+$", "", sanitized)
+    return sanitized or "default_collection"
+
+# Cache the PDF chunks
+@st.cache_data
+def read_and_chunk_pdf(file_path):
+    """
+    Read and chunk the PDF, then return chunks with progress.
+    """
+    from pypdf import PdfReader
+
+    # Read the PDF
+    reader = PdfReader(file_path)
     pdf_texts = [p.extract_text().strip() for p in reader.pages]
-    pdf_texts = [text for text in pdf_texts if text]
-    return pdf_texts
+    pdf_texts = [text for text in pdf_texts if text]  # Remove empty pages
 
-def chunk_texts(texts):
+    # Combine text into a single string
+    full_text = "\n\n".join(pdf_texts)
+
+    # Initialize the text splitter
     character_splitter = RecursiveCharacterTextSplitter(
         separators=["\n\n", "\n", ". ", " ", ""],
         chunk_size=1000,
         chunk_overlap=100
     )
-    character_chunks = character_splitter.split_text("\n\n".join(texts))
-    
-    token_splitter = SentenceTransformersTokenTextSplitter(chunk_overlap=50, tokens_per_chunk=256)
-    token_chunks = []
-    for chunk in character_chunks:
-        token_chunks.extend(token_splitter.split_text(chunk))
-    return token_chunks
 
-def create_chroma_collection(file_name, embedding_function):
-    collection_name = os.path.splitext(file_name)[0]
-    chroma_client = chromadb.Client()
+    # Initialize the progress bar
+    progress_bar = st.progress(0)
+    total_length = len(full_text)
+
+    # Chunk the text with progress updates
+    chunks = []
+    for i, chunk in enumerate(character_splitter.split_text(full_text)):
+        chunks.append(chunk)
+        progress_bar.progress((i + 1) / total_length)
+
+    progress_bar.empty()  # Remove the progress bar when done
+    return chunks
+
+# Cache the ChromaDB client as a resource
+@st.cache_resource
+def get_chroma_client():
+    return chromadb.Client()
+
+# Function to create and load ChromaDB collection
+@st.cache_resource
+def create_and_load_chroma_collection(_chroma_client, chunks, file_name):
+    collection_name = sanitize_collection_name(os.path.splitext(file_name)[0])
+    existing_collections = [col.name for col in _chroma_client.list_collections()]
     
-    existing_collections = [col.name for col in chroma_client.list_collections()]
     if collection_name in existing_collections:
-        chroma_client.delete_collection(name=collection_name)
+        _chroma_client.delete_collection(name=collection_name)
     
-    collection = chroma_client.create_collection(name=collection_name, embedding_function=embedding_function)
-    return collection
-
-def process_pdf(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        tmp_file_path = tmp_file.name
-
-    texts = read_pdf(tmp_file_path)
-    chunks = chunk_texts(texts)
+    embedding_function = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    collection = _chroma_client.create_collection(name=collection_name, embedding_function=embedding_function)
     
-    collection = create_chroma_collection(uploaded_file.name, st.session_state.embedding_function)
     ids = [str(i) for i in range(len(chunks))]
     collection.add(ids=ids, documents=chunks)
-    
-    embeddings = collection.get(include=['embeddings'])['embeddings']
-    umap_model = umap.UMAP(random_state=42).fit(embeddings)
-    
-    os.unlink(tmp_file_path)
-    return collection, embeddings, umap_model
+    return collection
 
-def generate_response(query, retrieved_documents):
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-    information = "\n\n".join(retrieved_documents)
-    
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful expert financial research assistant. Answer the user's question using only the provided information from the annual report."
-        },
-        {"role": "user", "content": f"Question: {query}\nInformation: {information}"}
-    ]
-    
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
+# Function to query ChromaDB
+def query_chroma(collection, query, n_results=5):
+    results = collection.query(query_texts=[query], n_results=n_results, include=['documents'])
+    return results
+
+# Function to chat with OpenAI model
+def chat_with_openai(prompt, retrieved_documents=None, model="gpt-4o-mini"):
+    try:
+        information = "\n\n".join(retrieved_documents)
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful expert financial research assistant. Your users are asking questions about information contained in an annual report."
+                "You will be shown the user's question, and the relevant information from the annual report. Answer the user's question using only this information."
+            },
+            {"role": "user", "content": f"Question: {prompt}. \n Information: {information}"}
+        ]
+        
+        response = openai_client.chat.completions.create(
+            model=model,
+            messages=messages,
+        )
+        content = response.choices[0].message.content
+        return content
+    except Exception as e:
+        return f"Error: {e}"
+
+# Function to chat with Ollama model
+def chat_with_ollama(model_name, prompt, retrieved_documents=None):
+    """
+    Generate a response from the selected Ollama model, including context from retrieved documents.
+    """
+    try:
+        # Format the context for the prompt
+        if retrieved_documents:
+            context = "\n\n".join(retrieved_documents)
+            full_prompt = f"Context: {context}\n\nQuestion: {prompt}\n\nAnswer the question using only the provided context."
+        else:
+            full_prompt = prompt
+
+        # Generate response from Ollama
+        response = ollama_generate(model=model_name, prompt=full_prompt)
+        return response.get("response", "No response generated.")
+    except Exception as e:
+        return f"Error: {e}"
+
+# Function to fetch Ollama models
+def get_ollama_models():
+    try:
+        models_info = list_ollama_models()
+        return [model.model for model in models_info.models]
+    except Exception as e:
+        logger.error(f"Error fetching Ollama models: {e}")
+        return []
+
+# Helper CSS to adjust spacing and font size
+st.markdown(
+    """
+    <style>
+        /* Reduce spacing above headers */
+        .css-18e3th9 {
+            padding-top: 0.5rem;
+            padding-bottom: 0rem;
+        }
+        
+        /* Adjust overall font size */
+        html, body, .block-container {
+            font-size: 14px;
+        }
+
+        /* Reduce space between sidebar elements */
+        section[data-testid="stSidebar"] .css-1d391kg {
+            margin-bottom: 0.5rem;
+        }
+        /* Hide spinner log outputs like Running create_and_load_chroma_collection */
+        .stSpinner > div > div {
+            display: none;
+        }
+
+        /* Adjust the height of processing steps to make chat area more visible */
+        .processing-box {
+            margin-bottom: 1rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+def sidebar():
+    st.sidebar.image(
+        "logo.png", 
+        width=200,  # Set the width to control the size (adjust as needed)
+        # caption="RAG Application", 
+        output_format="PNG"
     )
-    return response.choices[0].message.content
+    # Compact Sidebar Configuration
+    # st.sidebar.title("🔧 Configuration")
+    # st.sidebar.markdown("---")
+    
+    # Compact Model Type Dropdown
+    model_type = st.sidebar.selectbox(
+        "LLM Type:",
+        ["Ollama", "OpenAI"],
+        index=0,
+        help="Select the language model type"
+    )
+    # OpenAI API Key Input
+    openai_api_key = default_openai_api_key
+    if model_type == "OpenAI":
+        st.sidebar.markdown("### OpenAI Configuration")
+        if not default_openai_api_key:
+            openai_api_key = st.sidebar.text_input(
+                "Enter OpenAI API Key",
+                type="password",
+                help="Required to use OpenAI models. This will override the default key.",
+            )
+        else:
+            st.sidebar.success("API key loaded from .env file.")
 
-def visualize_embeddings(dataset_embeddings, query_embedding, retrieved_embeddings, umap_model):
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    projected_dataset = umap_model.transform(dataset_embeddings)
-    projected_query = umap_model.transform([query_embedding])
-    projected_retrieved = umap_model.transform(retrieved_embeddings)
-    
-    ax.scatter(projected_dataset[:, 0], projected_dataset[:, 1], s=10, color='gray', label='Dataset', alpha=0.5)
-    ax.scatter(projected_query[:, 0], projected_query[:, 1], s=150, color='red', marker='X', label='Query')
-    ax.scatter(projected_retrieved[:, 0], projected_retrieved[:, 1], s=100, edgecolors='green', facecolors='none', label='Retrieved')
-    ax.legend()
-    ax.set_title('Document Embedding Space Visualization')
-    
-    return fig
+    # Compact Model Selection
+    selected_model = None
+    if model_type == "Ollama":
+        ollama_models = get_ollama_models()
+        if ollama_models:
+            default_index = ollama_models.index("llama3.2:latest") if "llama3.2:latest" in ollama_models else 0
+            selected_model = st.sidebar.selectbox(
+                "Model:",
+                options=ollama_models,
+                index=default_index,
+                help="Select a specific Ollama model"
+            )
+        else:
+            st.sidebar.warning("No Ollama models available.")
+    elif model_type == "OpenAI":
+        selected_model = "gpt-4o-mini"
 
-# Streamlit UI
-st.set_page_config(layout="wide", page_title="RAG Document Analysis")
+    # Compact File Uploader
+    st.sidebar.markdown("### Upload PDF")
+    file_upload = st.sidebar.file_uploader(
+        "Upload a PDF file",
+        type=["pdf"],
+        help="Drag and drop a PDF file or browse files",
+    )
+    # Add a horizontal separator and author information
+    st.sidebar.markdown("---")
+    # Enhanced author details with an avatar and description
+    st.sidebar.image(
+        "Midhun.png",  # Replace with the actual path to your avatar image
+        width=100,  # Adjust size of avatar image
+    )
+    st.sidebar.markdown(
+        """ 
+        **[Midhun Kanadan](https://www.linkedin.com/in/midhunkanadan/)**  
+        *ML and AI Enthusiast*  
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    return model_type, selected_model, file_upload, openai_api_key
 
-# Sidebar
-with st.sidebar:
-    st.title("Document Upload")
-    uploaded_file = st.file_uploader("Upload PDF Document", type="pdf")
-    
-    if uploaded_file:
-        with st.spinner("Processing PDF..."):
-            st.session_state.chroma_collection, st.session_state.embeddings, st.session_state.umap_model = process_pdf(uploaded_file)
-        st.success("PDF processed successfully!")
-    
+
+import time  # To simulate progress updates
+
+# Updated main function with progress bar
+def main():
+    # Title and Header
+    st.title("📘 LLM-RAG-Application-for-Advanced-PDF-Querying")
+    st.markdown(
+        """
+        Welcome to the **RAG Application** leveraging **Ollama** and **OpenAI** models. 
+        Upload a PDF and ask questions to get answers based on the document content.
+        """
+    )
     st.markdown("---")
-    st.markdown("### About")
-    st.markdown("""
-    This application uses RAG (Retrieval-Augmented Generation) to analyze PDF documents and answer questions about their content.
-    
-    1. Upload a PDF document
-    2. Ask questions in the chat
-    3. View relevant document sections
-    4. See visualization of document embeddings
-    """)
 
-# Main content area
-st.title("Document Q&A System")
+    # Sidebar setup
+    # model_type, selected_model, file_upload = sidebar()
+    model_type, selected_model, file_upload, openai_api_key = sidebar()
 
-# Initialize chat interface
-if uploaded_file is None:
-    st.info("Please upload a PDF document to begin.")
-else:
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # Chat input
-    if prompt := st.chat_input("Ask a question about the document"):
-        # Display user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    # Set OpenAI API Key if provided
+    if model_type == "OpenAI" and openai_api_key:
+        openai.api_key = openai_api_key
+        st.sidebar.success("OpenAI API Key is set.")
+    elif model_type == "OpenAI" and not openai_api_key:
+        st.sidebar.error("Please provide a valid OpenAI API Key.")
+
+    # Main Workspace
+    if file_upload:
+        st.markdown("### Processing Steps")
         
-        # Generate response
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                # Query the vector store
-                results = st.session_state.chroma_collection.query(
-                    query_texts=[prompt],
-                    n_results=5,
-                    include=['documents', 'embeddings']
+        # Initialize progress bar
+        progress_bar = st.progress(0)  # Starts at 0%
+
+        # Step 1: Read and chunk PDF
+        with st.spinner("📖 Reading and processing the PDF..."):
+            try:
+                time.sleep(1)  # Simulate processing time
+                chunks = read_and_chunk_pdf(file_upload)
+                progress_bar.progress(33)  # Update progress to 33%
+                st.success("✅ PDF processed into chunks.")
+            except Exception as e:
+                st.error(f"Error processing PDF: {e}")
+                return
+
+        # Step 2: Create embeddings and vector database
+        with st.spinner("🔧 Creating embeddings and building vector database..."):
+            try:
+                time.sleep(1)  # Simulate processing time
+                chroma_client = get_chroma_client()
+                chroma_collection = create_and_load_chroma_collection(
+                    chroma_client, chunks, file_upload.name
                 )
-                retrieved_docs = results['documents'][0]
-                retrieved_embeddings = results['embeddings'][0]
-                
-                # Generate response
-                response = generate_response(prompt, retrieved_docs)
-                
-                # Display response
-                st.markdown(response)
-                
-                # Create columns for source documents and visualization
-                col1, col2 = st.columns([1, 1])
-                
-                with col1:
-                    st.markdown("#### Relevant Document Sections")
-                    for i, doc in enumerate(retrieved_docs, 1):
-                        with st.expander(f"Source {i}"):
-                            st.markdown(doc)
-                
-                with col2:
-                    st.markdown("#### Document Embedding Space")
-                    fig = visualize_embeddings(
-                        st.session_state.embeddings,
-                        st.session_state.embedding_function([prompt])[0],
-                        retrieved_embeddings,
-                        st.session_state.umap_model
-                    )
-                    st.pyplot(fig)
-        
-        # Append assistant response to messages
-        st.session_state.messages.append({"role": "assistant", "content": response})
+                progress_bar.progress(100)  # Update progress to 66%
+                st.success("✅ Vector database created successfully.")
+            except Exception as e:
+                st.error(f"Error building vector database: {e}")
+                return
+
+        # Step 3: Allow user to ask questions
+        st.markdown("### 🔍 Ask a Question")
+        query = st.text_input("Enter your question:")
+
+        if query:
+            with st.spinner("🔎 Retrieving relevant documents..."):
+                try:
+                    time.sleep(1)  # Simulate processing time
+                    retrieval_results = query_chroma(chroma_collection, query)
+                    retrieved_docs = retrieval_results["documents"][0]
+                    progress_bar.progress(100)  # Update progress to 100%
+                except Exception as e:
+                    st.error(f"Error retrieving documents: {e}")
+                    return
+
+            with st.spinner("💡 Generating response..."):
+                try:
+                    if model_type == "OpenAI":
+                        response = chat_with_openai(query, retrieved_docs, model=selected_model)
+                    elif model_type == "Ollama" and selected_model:
+                        response = chat_with_ollama(selected_model, query, retrieved_documents=retrieved_docs)
+                    else:
+                        response = "⚠️ No valid model selected."
+                except Exception as e:
+                    response = f"Error generating response: {e}"
+
+            # Display the response
+            st.markdown("### 📄 Answer")
+            st.markdown(f"**Question:** {query}")
+            st.markdown(f"**Answer:** {response}")
+
+            # Display Retrieved Documents
+            with st.expander("🔎 Retrieved Documents"):
+                for idx, doc in enumerate(retrieved_docs):
+                    st.markdown(f"**Document {idx + 1}:**")
+                    st.write(doc)
+    else:
+        st.info("Please upload a PDF file to begin.")
+
+
+
+if __name__ == "__main__":
+    main()
