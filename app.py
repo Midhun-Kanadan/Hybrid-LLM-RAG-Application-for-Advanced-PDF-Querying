@@ -106,20 +106,30 @@ def query_chroma(collection, query, n_results=5):
     results = collection.query(query_texts=[query], n_results=n_results, include=['documents'])
     return results
 
-# Function to chat with OpenAI model
+
 def chat_with_openai(prompt, retrieved_documents=None, model="gpt-4o-mini"):
+    """
+    Generate a response from the OpenAI model using retrieved context from the document.
+    """
     try:
         information = "\n\n".join(retrieved_documents)
 
         messages = [
             {
                 "role": "system",
-                "content": "You are a helpful expert financial research assistant. Your users are asking questions about information contained in an annual report."
-                "You will be shown the user's question, and the relevant information from the annual report. Answer the user's question using only this information."
+                "content": (
+                    "You are an advanced AI assistant designed to answer user questions based on the provided context. "
+                    "You will be shown the user's question along with relevant information extracted from a document. "
+                    "Provide accurate and concise answers using only the provided context. "
+                    "If the context is insufficient to answer the question, respond with 'The information is not available in the provided document.'"
+                ),
             },
-            {"role": "user", "content": f"Question: {prompt}. \n Information: {information}"}
+            {
+                "role": "user",
+                "content": f"Question: {prompt}. \n Information: {information}"
+            }
         ]
-        
+
         response = openai_client.chat.completions.create(
             model=model,
             messages=messages,
@@ -129,7 +139,7 @@ def chat_with_openai(prompt, retrieved_documents=None, model="gpt-4o-mini"):
     except Exception as e:
         return f"Error: {e}"
 
-# Function to chat with Ollama model
+
 def chat_with_ollama(model_name, prompt, retrieved_documents=None):
     """
     Generate a response from the selected Ollama model, including context from retrieved documents.
@@ -138,7 +148,12 @@ def chat_with_ollama(model_name, prompt, retrieved_documents=None):
         # Format the context for the prompt
         if retrieved_documents:
             context = "\n\n".join(retrieved_documents)
-            full_prompt = f"Context: {context}\n\nQuestion: {prompt}\n\nAnswer the question using only the provided context."
+            full_prompt = (
+                f"Context: {context}\n\n"
+                f"Question: {prompt}\n\n"
+                f"Answer the question using only the provided context. "
+                f"If the information is insufficient, respond with: 'The information is not available in the provided document.'"
+            )
         else:
             full_prompt = prompt
 
@@ -147,6 +162,7 @@ def chat_with_ollama(model_name, prompt, retrieved_documents=None):
         return response.get("response", "No response generated.")
     except Exception as e:
         return f"Error: {e}"
+
 
 # Function to fetch Ollama models
 def get_ollama_models():
