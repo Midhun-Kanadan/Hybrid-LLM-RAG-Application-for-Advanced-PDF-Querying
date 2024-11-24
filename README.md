@@ -14,7 +14,6 @@
 - **PDF Chunking and Querying**: Automatically processes PDF files into chunks for efficient retrieval.
 - **Dynamic OpenAI API Configuration**: Load API keys from a `.env` file or input them directly in the application.
 - **Interactive UI**: User-friendly interface built with Streamlit.
-- **LinkedIn Integration**: Includes author information and direct LinkedIn access.
 - **Real-Time Progress Bar**: Displays step-by-step progress for processing, embedding, and querying.
 - **Customizable RAG Settings**: Easily configure the LLM type and model through a sidebar.
 
