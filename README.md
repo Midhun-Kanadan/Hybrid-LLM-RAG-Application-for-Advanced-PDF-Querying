@@ -22,14 +22,14 @@
 
 ---
 
-## To-Do List
+## To-Do List: Upcoming Enhancements
 
-### Enhancements to Add:
+### Planned Improvements:
 
-- [ ] **Try Different Embeddings:** Experiment with other embedding models like Sentence-BERT, Cohere, or HuggingFace transformers.
-- [ ] **Different Chunking Methods:** Implement advanced chunking methods such as semantic chunking or token-based chunking.
-- [ ] **Advanced Retrieval Methods:** Incorporate strategies like Multi-Query Retriever or Vector Search with Hybrid Retrieval.
-- [ ] **Agentic RAG:** Explore incorporating agents to handle multi-step queries or interact with external APIs dynamically.
-- [ ] **Support for Multiple Languages:** Enable processing of documents in languages other than English, such as German, for multilingual support.
+- [ ] **Experiment with Advanced Embedding Models:** Incorporate other embedding models like Sentence-BERT, Cohere, or HuggingFace transformers for better semantic understanding.
+- [ ] **Implement Smarter Chunking Techniques:** Explore methods such as semantic chunking or token-based chunking for more meaningful splits of document content.
+- [ ] **Integrate Advanced Retrieval Strategies:** Add techniques like Multi-Query Retriever or hybrid approaches combining vector and traditional search methods.
+- [ ] **Develop Agentic RAG:** Build agents to handle multi-step queries, retrieve additional data, or interact dynamically with APIs.
+- [ ] **Enable Multilingual Document Support:** Extend the application to handle documents in languages like German, French, or Spanish for broader usability.
 
 ---
