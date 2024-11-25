@@ -9,7 +9,12 @@ from ollama import generate as ollama_generate, list as list_ollama_models
 import openai
 from dotenv import load_dotenv
 import re
-import time
+import time  # To simulate progress updates
+import umap
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from io import BytesIO
 
 import openai
 from openai import OpenAI
@@ -103,7 +108,7 @@ def create_and_load_chroma_collection(_chroma_client, chunks, file_name):
 
 # Function to query ChromaDB
 def query_chroma(collection, query, n_results=5):
-    results = collection.query(query_texts=[query], n_results=n_results, include=['documents'])
+    results = collection.query(query_texts=[query], n_results=n_results, include=['documents', 'embeddings'])
     return results
 
 
@@ -280,8 +285,54 @@ def sidebar():
     
     return model_type, selected_model, file_upload, openai_api_key
 
+# Function to project embeddings using UMAP
+def project_embeddings(embeddings, umap_transform):
+    """
+    Projects embeddings into 2D space using a pre-fitted UMAP transform.
+    """
+    umap_embeddings = np.empty((len(embeddings), 2))
+    for i, embedding in enumerate(tqdm(embeddings, desc="Projecting embeddings")):
+        umap_embeddings[i] = umap_transform.transform([embedding])
+    return umap_embeddings
 
-import time  # To simulate progress updates
+# Function to visualize embeddings
+def visualize_embeddings(query, query_embedding, dataset_embeddings, retrieved_embeddings, umap_transform):
+    """
+    Visualizes embeddings using UMAP projection.
+    """
+    projected_dataset_embeddings = umap_transform.fit_transform(dataset_embeddings)
+    projected_query_embedding = umap_transform.transform([query_embedding])
+    projected_retrieved_embeddings = project_embeddings(retrieved_embeddings, umap_transform)
+
+    # Plot the embeddings
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.scatter(
+        projected_dataset_embeddings[:, 0],
+        projected_dataset_embeddings[:, 1],
+        s=10,
+        color="gray",
+        label="Dataset Chunks"
+    )
+    ax.scatter(
+        projected_query_embedding[:, 0],
+        projected_query_embedding[:, 1],
+        s=150,
+        marker="X",
+        color="red",
+        label="Query"
+    )
+    ax.scatter(
+        projected_retrieved_embeddings[:, 0],
+        projected_retrieved_embeddings[:, 1],
+        s=100,
+        facecolors="none",
+        edgecolors="green",
+        label="Retrieved Chunks"
+    )
+    ax.set_title(f"UMAP Projection of Query and Retrieved Chunks", fontsize=14)
+    ax.axis("off")
+    ax.legend()
+    st.pyplot(fig)
 
 # Updated main function with progress bar
 def main():
@@ -348,6 +399,7 @@ def main():
                     time.sleep(1)  # Simulate processing time
                     retrieval_results = query_chroma(chroma_collection, query)
                     retrieved_docs = retrieval_results["documents"][0]
+                    retrieved_embeddings = retrieval_results["embeddings"][0]
                     progress_bar.progress(100)  # Update progress to 100%
                 except Exception as e:
                     st.error(f"Error retrieving documents: {e}")
@@ -374,9 +426,14 @@ def main():
                 for idx, doc in enumerate(retrieved_docs):
                     st.markdown(f"**Document {idx + 1}:**")
                     st.write(doc)
+            # Embedding Visualization
+            with st.spinner("🔍 Visualizing embeddings..."):
+                embeddings = chroma_collection.get(include=["embeddings"])["embeddings"]
+                query_embedding = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")([query])[0]
+                umap_transform = umap.UMAP(n_neighbors=15, n_components=2, random_state=42)
+                visualize_embeddings(query, query_embedding, embeddings, retrieved_embeddings, umap_transform)
     else:
         st.info("Please upload a PDF file to begin.")
-
 
 
 if __name__ == "__main__":
