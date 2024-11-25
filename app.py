@@ -14,7 +14,15 @@ import umap
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from io import BytesIO
+import plotly.express as px
+import textwrap
+import pandas as pd
+import warnings
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", message="n_jobs value 1 overridden to 1 by setting random_state")
+
+
 
 import openai
 from openai import OpenAI
@@ -168,7 +176,6 @@ def chat_with_ollama(model_name, prompt, retrieved_documents=None):
     except Exception as e:
         return f"Error: {e}"
 
-
 # Function to fetch Ollama models
 def get_ollama_models():
     try:
@@ -295,6 +302,117 @@ def project_embeddings(embeddings, umap_transform):
         umap_embeddings[i] = umap_transform.transform([embedding])
     return umap_embeddings
 
+# Function to wrap long text with HTML <br> for hover
+def wrap_text_with_html(text, width=50):
+    return "<br>".join(textwrap.wrap(text, width=width))
+
+# Function to visualize embeddings using Plotly
+# def visualize_embeddings_plotly(query, query_embedding, dataset_embeddings, retrieved_embeddings, chunks, retrieved_documents):
+#     """
+#     Visualizes embeddings using UMAP projection and Plotly.
+#     """
+#     # Project all embeddings
+#     umap_transform = umap.UMAP(n_neighbors=15, n_components=2, random_state=42).fit(dataset_embeddings)
+#     projected_dataset_embeddings = project_embeddings(dataset_embeddings, umap_transform)
+#     projected_query_embedding = project_embeddings([query_embedding], umap_transform)
+#     projected_retrieved_embeddings = project_embeddings(retrieved_embeddings, umap_transform)
+
+#     # Prepare data for Plotly visualization
+#     dataset_points = {
+#         "type": ["Dataset Chunks"] * len(projected_dataset_embeddings),
+#         "x": projected_dataset_embeddings[:, 0],
+#         "y": projected_dataset_embeddings[:, 1],
+#         "text": [wrap_text_with_html(chunk, width=50) for chunk in chunks],  # Dataset chunks
+#     }
+
+#     query_point = {
+#         "type": ["Query"],
+#         "x": projected_query_embedding[:, 0],
+#         "y": projected_query_embedding[:, 1],
+#         "text": [wrap_text_with_html(query, width=50)],  # Query text
+#     }
+
+#     retrieved_points = {
+#         "type": ["Retrieved Chunks"] * len(projected_retrieved_embeddings),
+#         "x": projected_retrieved_embeddings[:, 0],
+#         "y": projected_retrieved_embeddings[:, 1],
+#         "text": [wrap_text_with_html(doc, width=50) for doc in retrieved_documents],  # Retrieved documents
+#     }
+
+#     # Combine all data
+#     data = pd.DataFrame(dataset_points)
+#     data = pd.concat([data, pd.DataFrame(query_point), pd.DataFrame(retrieved_points)], ignore_index=True)
+
+#     # Create a Plotly scatter plot
+#     fig = px.scatter(
+#         data,
+#         x="x",
+#         y="y",
+#         color="type",
+#         hover_data={"text": True, "x": False, "y": False, "type": False},  # Show only text on hover
+#         title="UMAP Projection of Query and Retrieved Chunks",
+#     )
+#     fig.update_traces(marker=dict(size=10, opacity=0.8))  # Adjust marker size and transparency
+#     fig.update_layout(title_font_size=18, legend=dict(font=dict(size=12)))
+#     return fig
+def visualize_embeddings_plotly(query, query_embedding, dataset_embeddings, retrieved_embeddings, chunks, retrieved_documents):
+    """
+    Visualizes embeddings using UMAP projection and Plotly with improved colors and readability.
+    """
+    # Project all embeddings
+    umap_transform = umap.UMAP(n_neighbors=15, n_components=2, random_state=42).fit(dataset_embeddings)
+    projected_dataset_embeddings = project_embeddings(dataset_embeddings, umap_transform)
+    projected_query_embedding = project_embeddings([query_embedding], umap_transform)
+    projected_retrieved_embeddings = project_embeddings(retrieved_embeddings, umap_transform)
+
+    # Prepare data for Plotly visualization
+    dataset_points = {
+        "type": ["Dataset Chunks"] * len(projected_dataset_embeddings),
+        "x": projected_dataset_embeddings[:, 0],
+        "y": projected_dataset_embeddings[:, 1],
+        "text": [wrap_text_with_html(chunk, width=50) for chunk in chunks],  # Dataset chunks
+    }
+
+    query_point = {
+        "type": ["Query"],
+        "x": projected_query_embedding[:, 0],
+        "y": projected_query_embedding[:, 1],
+        "text": [wrap_text_with_html(query, width=50)],  # Query text
+    }
+
+    retrieved_points = {
+        "type": ["Retrieved Chunks"] * len(projected_retrieved_embeddings),
+        "x": projected_retrieved_embeddings[:, 0],
+        "y": projected_retrieved_embeddings[:, 1],
+        "text": [wrap_text_with_html(doc, width=50) for doc in retrieved_documents],  # Retrieved documents
+    }
+
+    # Combine all data
+    data = pd.DataFrame(dataset_points)
+    data = pd.concat([data, pd.DataFrame(query_point), pd.DataFrame(retrieved_points)], ignore_index=True)
+
+    # Define colors for better visibility
+    color_map = {
+        "Dataset Chunks": "#7f8c8d",  # Gray
+        "Query": "#e74c3c",           # Bright Red
+        "Retrieved Chunks": "#2ecc71", # Bright Green
+    }
+
+    # Create a Plotly scatter plot
+    fig = px.scatter(
+        data,
+        x="x",
+        y="y",
+        color="type",
+        hover_data={"text": True, "x": False, "y": False, "type": False},  # Show only text on hover
+        title="UMAP Projection of Query and Retrieved Chunks",
+        color_discrete_map=color_map,  # Use custom colors
+    )
+    fig.update_traces(marker=dict(size=10, opacity=0.9))  # Adjust marker size and transparency
+    fig.update_layout(title_font_size=18, legend=dict(font=dict(size=12)))
+    return fig
+
+
 # Function to visualize embeddings
 def visualize_embeddings(query, query_embedding, dataset_embeddings, retrieved_embeddings, umap_transform):
     """
@@ -400,6 +518,7 @@ def main():
                     retrieval_results = query_chroma(chroma_collection, query)
                     retrieved_docs = retrieval_results["documents"][0]
                     retrieved_embeddings = retrieval_results["embeddings"][0]
+
                     progress_bar.progress(100)  # Update progress to 100%
                 except Exception as e:
                     st.error(f"Error retrieving documents: {e}")
@@ -426,12 +545,20 @@ def main():
                 for idx, doc in enumerate(retrieved_docs):
                     st.markdown(f"**Document {idx + 1}:**")
                     st.write(doc)
+            # # Embedding Visualization
+            # with st.spinner("🔍 Visualizing embeddings..."):
+            #     embeddings = chroma_collection.get(include=["embeddings"])["embeddings"]
+            #     query_embedding = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")([query])[0]
+            #     umap_transform = umap.UMAP(n_neighbors=15, n_components=2, random_state=42)
+            #     visualize_embeddings(query, query_embedding, embeddings, retrieved_embeddings, umap_transform)
             # Embedding Visualization
-            with st.spinner("🔍 Visualizing embeddings..."):
+            with st.spinner("### 🌐 Embedding Visualization"):
                 embeddings = chroma_collection.get(include=["embeddings"])["embeddings"]
                 query_embedding = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")([query])[0]
-                umap_transform = umap.UMAP(n_neighbors=15, n_components=2, random_state=42)
-                visualize_embeddings(query, query_embedding, embeddings, retrieved_embeddings, umap_transform)
+                # st.markdown("### 🌐 Embedding Visualization")
+                query_embedding = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")([query])[0]
+                fig = visualize_embeddings_plotly(query, query_embedding, embeddings, retrieved_embeddings, chunks, retrieved_docs)
+                st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Please upload a PDF file to begin.")
 

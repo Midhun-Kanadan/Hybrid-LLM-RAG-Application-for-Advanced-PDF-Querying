@@ -16,5 +16,6 @@
 - **Interactive UI**: User-friendly interface built with Streamlit.
 - **Real-Time Progress Bar**: Displays step-by-step progress for processing, embedding, and querying.
 - **Customizable RAG Settings**: Easily configure the LLM type and model through a sidebar.
+- **Embedding Visualization**: Leverage UMAP to visually project query and retrieved embeddings in 2D space, with interactive tooltips displaying document chunks and query text.
 
 ---
