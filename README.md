@@ -1,6 +1,8 @@
 # Hybrid-LLM-RAG-Application-for-Advanced-PDF-Querying
 
 ![RAG Application UI](RAG_Application.png)
+---
+![Embedding_Visualization](Embedding_Visualization.png)
 
 ## 📘 Overview
 
